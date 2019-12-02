@@ -1585,9 +1585,9 @@ double CFiniteElementStd::CalCoefMass()
                 arg[0] = interpolate(NodalVal1);   //   p
                 arg[1] = interpolate(NodalValC1);  //   T
                 if (cpl_pcs)
-                     arg[1] = interpolate(NodalValC1);
+                    arg[1] = interpolate(NodalValC1);
                 else
-                     arg[1] = PhysicalConstant::CelsiusZeroInKelvin + 20.0;
+                    arg[1] = PhysicalConstant::CelsiusZeroInKelvin + 20.0;
                 drho_dp_rho = FluidProp->drhodP(arg) / rho_val;
             }
             else
@@ -1737,9 +1737,9 @@ double CFiniteElementStd::CalCoefMass()
                 double arg[2];
                 arg[0] = PG;
                 if (cpl_pcs)
-                     arg[1] = interpolate(NodalValC1);
+                    arg[1] = interpolate(NodalValC1);
                 else
-                     arg[1] = PhysicalConstant::CelsiusZeroInKelvin + 20.0;
+                    arg[1] = PhysicalConstant::CelsiusZeroInKelvin + 20.0;
                 drho_dp_rho = FluidProp->drhodP(arg) / rhow;
             }
             else
@@ -2199,6 +2199,7 @@ void CFiniteElementStd::CalCoefLaplace(bool Gravity, int ip)
 {
     double dens_arg[3];  // AKS
     double mat_fac = 1.0;
+    double perm_effstress_k = 0.0; // LU 06.2018
     double Dpv = 0.0;
     double poro = 0.0;
     double tort = 0.0;
@@ -2210,10 +2211,9 @@ void CFiniteElementStd::CalCoefLaplace(bool Gravity, int ip)
     double GradH[3], Gradz[3], w[3], v1[3], v2[3];
     int nidx1;
     int Index = MeshElement->GetIndex();
-    double k_rel;
+    double k_rel, ipress;
     double variables[3];         // OK4709
     int tr_phase = 0;            // SB, BG
-    double perm_effstress = 1.;  // AS:08.2012
     // WX:12.2012 perm depends on p or strain, same as CalCoefLaplace2
     CFiniteElementStd* h_fem;
     h_fem = this;
@@ -2236,8 +2236,19 @@ void CFiniteElementStd::CalCoefLaplace(bool Gravity, int ip)
             {
                 CFiniteElementStd* h_fem;
                 h_fem = this;
-                perm_effstress = MediaProp->PermeabilityFunctionEffStress(
-                    Index, nnodes, h_fem);
+                if (MediaProp->permeability_effstress_model >
+                    12)  // LU: 08.2018, correct pressure reading here with
+                         // OpenMP
+                {
+                    ipress = interpolate(NodalVal1);
+                    fac_perm = MediaProp->PermeabilityFunctionPressPlastic(
+                        Index, nnodes, ipress, h_fem);
+                }
+                else
+                {
+                    fac_perm = MediaProp->PermeabilityFunctionEffStress(
+                        Index, nnodes, h_fem);
+                }
             }
 
             // if (ele_dim != dim)
@@ -2295,11 +2306,38 @@ void CFiniteElementStd::CalCoefLaplace(bool Gravity, int ip)
                 for (size_t i = 0; i < dim; i++)
                     tensor[i * dim + i] *= w[i];
             }
-            for (size_t i = 0; i < dim * dim; i++)
-                mat[i] = time_unit_factor * tensor[i] / mat_fac *
-                         perm_effstress *
-                         k_rel;  // AS:perm. dependent eff stress.
-
+            if (MediaProp->permeability_effstress_model > 12)
+            {
+                for (size_t i = 0; i < dim * dim; i++)
+                {
+                    if (tensor[i] == 0)
+                    {
+                        perm_effstress_k =
+                            1.0;  // AS:perm. dependent eff stress.
+                    }
+                    else
+                    {
+                        if (MediaProp->permeability_tensor_type == 0)
+                        {
+                            perm_effstress_k = fac_perm / tensor[i];
+                        }
+                        else
+                        {
+                            perm_effstress_k = fac_perm;
+                        }
+                    }
+                    mat[i] = tensor[i] / mat_fac * perm_effstress_k *
+                             k_rel;  // AS:perm. dependent eff stress.
+                }
+            }
+            else
+            {
+                for (size_t i = 0; i < dim * dim; i++)
+                {
+                    mat[i] = tensor[i] / mat_fac * fac_perm *
+                             k_rel;  // LU generic fac_perm.
+                }
+            }
             break;
         case EPT_GROUNDWATER_FLOW:  // Groundwater flow
             /* SB4218 - moved to ->PermeabilityTensor(Index);

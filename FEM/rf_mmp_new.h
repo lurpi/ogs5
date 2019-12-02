@@ -126,6 +126,11 @@ public:
                                       CFiniteElementStd* h_fem);  // WX
     double PermeabilityFunctionEffStress(
         long index, int nnodes, CFiniteElementStd* h_fem);  // AS:08.2012
+    double PermeabilityFunctionPressPlastic(
+        long index,
+        int nnodes,
+        double pressure,
+        CFiniteElementStd* h_fem);  // LU:09.2018
     double StorageFunctionEffStress(long index,
                                     int nnodes,
                                     CFiniteElementStd* h_fem);  // AS 08.2012
@@ -269,8 +274,8 @@ public:
                                     // 05.2010
     int permeability_strain_model_value[6];  // WX:permeability fuction strain
                                              // model value. 05.2010
-    int permeability_effstress_model_value[3];  // AS:perlmeability function eff
-                                                // stress 08.2012
+    double permeability_effstress_model_value[10];  // LU:permeability func
+                                                    // stress 06.2018
     int permeability_effstress_model;
     int storage_effstress_model_value[3];  // AS:storage function eff stress
                                            // 08.2012

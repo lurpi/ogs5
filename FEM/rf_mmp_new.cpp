@@ -181,7 +181,8 @@ bool MMPRead(std::string base_file_name)
     //----------------------------------------------------------------------
     // OK  MMPDelete();
     //----------------------------------------------------------------------
-    ScreenMessage("MMPRead ... ");;
+    ScreenMessage("MMPRead ... ");
+    ;
     CMediumProperties* m_mat_mp = NULL;
     char line[MAX_ZEILE];
     std::string sub_line;
@@ -207,7 +208,7 @@ bool MMPRead(std::string base_file_name)
         if (line_string.find("#STOP") != string::npos)
         {
             ScreenMessage("done, read %d medium properties\n",
-                                   mmp_vector.size());
+                          mmp_vector.size());
 
             return true;
         }
@@ -1476,6 +1477,53 @@ std::ios::pos_type CMediumProperties::Read(std::ifstream* mmp_file)
             {
                 case 1:
                     in >> permeability_effstress_model_value[0];
+                    break;
+                case 15:  // FM1 //LU:10.2016 FM1 --- bshear and  b_pressure
+                          // directly from .rfd curve
+                    in >> permeability_effstress_model_value
+                              [0];  // LU : b_initial 08.2018
+                    in >> permeability_effstress_model_value
+                              [1];  // LU : curve number pls_e - tan(dilation
+                                    // angle) 11.2017
+                    in >> permeability_effstress_model_value
+                              [2];  // LU : curve number bstress (pressure
+                                    // dependent aperture)  10.2017;
+                    in >> permeability_effstress_model_value
+                              [3];  // LU : x-pos of inj point 12.2017;
+                    in >> permeability_effstress_model_value
+                              [4];  // LU : y-pos of inj point 12.2017;
+                    in >> permeability_effstress_model_value
+                              [5];  // LU : z-pos of inj point 12.2017;
+                    in >> permeability_effstress_model_value
+                              [6];  // LU : range of increased perm 12.2017;
+                    in >> permeability_effstress_model_value
+                              [7];  // LU : intial perm increased around the
+                                    // well 12.2017;
+                    in >> permeability_effstress_model_value
+                              [8];  // LU : thickness of faut elements (needed
+                                    // for perm->b^3/12 transmissivity);
+                    std::cout << "mmp Model 15 FM1, open fracture of "
+                              << permeability_effstress_model_value[6]
+                              << " m radius centered in x "
+                              << permeability_effstress_model_value[3] << " y "
+                              << permeability_effstress_model_value[4] << " z "
+                              << permeability_effstress_model_value[5] << '\n';
+                    break;
+                case 16:  // FM2 //LU:10.2016 FM2 --- bshear and  b_pressure
+                          // directly from .rfd curve, intrinsic perm =
+                          // b^3/(12*fault_thickness)
+                    in >> permeability_effstress_model_value
+                              [0];  // LU : b_initial 08.2018
+                    in >> permeability_effstress_model_value
+                              [1];  // LU : curve number pls_e - tan(dilation
+                                    // angle) 11.2017
+                    in >> permeability_effstress_model_value
+                              [2];  // LU : curve number bstress (pressure
+                                    // dependent aperture) 10.2017;
+                    in >> permeability_effstress_model_value
+                              [3];  // LU : thickness of fault elements (needed
+                                    // for perm->b^3/12 transmissivity);
+                    std::cout << "mmp Model 16 FM2" << '\n';
                     break;
                 default:
                     cout << "Error in MMPRead: no valid permeability stress "
@@ -5109,6 +5157,125 @@ double CMediumProperties::PermeabilityFunctionEffStress(
             // effective stress as input
             perm_stress = GetCurveValue(
                 (int)permeability_effstress_model_value[0], 0, prin_str[0], &i);
+            break;
+        default:
+            break;
+    }
+    return perm_stress;
+}
+//------------------------------------------------------------------------
+// 12.(iv).2 PERMEABILITY_FUNCTION_DECOVALEX2019-TASKB
+//------------------------------------------------------------------------
+// LU: permeability as function of pressure and plastic strain for liquid flow.
+// 06.2018
+double CMediumProperties::PermeabilityFunctionPressPlastic(
+    long index, int nnodes, double pressure, CFiniteElementStd* h_fem)
+{
+    int idx, ii, i, j, size;
+    double perm_stress = 1.0;
+    double faultthick = 1.0;  // LU 08.2017
+    int gueltig;
+    // WW CRFProcessDeformation *dm_pcs = (CRFProcessDeformation *) this;
+    double value_nodes[8] = {0.0};  // LU pressure value nodes and interpolated
+    double value = 0.0;             // LU pressure value nodes and interpolated
+    double br = 0.0;                // LU to calculate b equivalent opening
+    double bshear = 0.0;            // LU 08.2017
+    double bstress = 0.0;           // LU 08.2017
+    double well_dist_square = 0.0;  // LU 08.2017
+    double well_frac_square = 0.0;  // LU 09.2018
+    double outp_dist = 0.0;         // LU 08.2017
+    double xyz[3];                  // LU 08.2017
+    // MeshLib::CNode * m_cnode; // test to read nodes
+    int idStrainP;
+    double xelnodes[8] = {0.};  // LU 11.2017 to extract noodes coordinates from
+                                // brick et similar elements
+    double yelnodes[8] = {0.};  // LU 11.2017 to extract noodes coordinates from
+                                // brick et similar elements
+    double zelnodes[8] = {0.};  // LU 11.2017 to extract noodes coordinates from
+                                // brick et similar elements
+    double strainp_nodes[20] = {0.};
+    double strainp, iindex = 0.;
+    idStrainP = h_fem->dm_pcs->GetNodeValueIndex("STRAIN_PLS");
+    for (int i = 0; i < nnodes; i++)
+        strainp_nodes[i] = h_fem->dm_pcs->GetNodeValue(
+            h_fem->dm_pcs->m_msh->ele_vector[index]->getNodeIndices()[i],
+            idStrainP);
+    strainp = h_fem->interpolate(strainp_nodes);
+
+    // concluded strain calculations LU 08.2017
+
+    // calculate principal effective stress
+    double stress[6] = {0.}, prin_str[6] = {0.}, prin_dir[9] = {0.};
+    int stress_index[6];
+    // model dimension
+    int dim = h_fem->dm_pcs->m_msh->GetCoordinateFlag() / 10;
+    size = 6;
+    if (dim == 2)
+    {
+        size = 4;
+        if (h_fem->axisymmetry)
+            dim = 3;
+    }
+    stress_index[0] = h_fem->dm_pcs->GetNodeValueIndex("STRESS_XX");
+    stress_index[1] = h_fem->dm_pcs->GetNodeValueIndex("STRESS_YY");
+    stress_index[2] = h_fem->dm_pcs->GetNodeValueIndex("STRESS_ZZ");
+    stress_index[3] = h_fem->dm_pcs->GetNodeValueIndex("STRESS_XY");
+    if (size == 6)
+    {
+        stress_index[4] = h_fem->dm_pcs->GetNodeValueIndex("STRESS_XZ");
+        stress_index[5] = h_fem->dm_pcs->GetNodeValueIndex("STRESS_YZ");
+    }
+    double stress_nodes[20] = {0.};
+
+    switch (permeability_effstress_model)
+    {
+        case 15:  // FM1 benchmark Task B decovalex pore pressure dependent
+                  // permeability
+            Fem_Ele_Std->RealCoordinates(
+                xyz);  // determine coordinates of the element, check if inside
+                       // radius of fracture
+            well_frac_square = permeability_effstress_model_value[6] *
+                               permeability_effstress_model_value[6];
+            well_dist_square =
+                (xyz[0] - permeability_effstress_model_value[3]) *
+                    (xyz[0] - permeability_effstress_model_value[3]) +
+                (xyz[1] - permeability_effstress_model_value[4]) *
+                    (xyz[1] - permeability_effstress_model_value[4]) +
+                (xyz[2] - permeability_effstress_model_value[5]) *
+                    (xyz[2] - permeability_effstress_model_value[5]);
+            if (well_dist_square < well_frac_square || strainp > 0.0)
+            {
+                strainp = 1.0;
+                bstress = GetCurveValue(
+                    (int)permeability_effstress_model_value[2], 0, pressure,
+                    &gueltig);  // function for permeability vs pressure
+            }
+            bshear = GetCurveValue(
+                (int)permeability_effstress_model_value[1], 0, strainp,
+                &gueltig);  // function for shear displ (pls strain times
+                            // element thickness)
+            br = GetCurveValue((int)permeability_effstress_model_value[0], 0, 1,
+                               &gueltig);  // constant - initial opening
+            faultthick = permeability_effstress_model_value
+                [8];  // load element thickness as defined in .mmp
+            perm_stress = (br + bshear + bstress) * (br + bshear + bstress) *
+                          (br + bshear + bstress) / (12 * faultthick);
+            break;
+        case 16:  // FM2 benchmark Task B DECOVALEX2019 pore pressure dependent
+                  // permeability
+            br = GetCurveValue((int)permeability_effstress_model_value[0], 0, 1,
+                               &gueltig);  // constant - initial opening
+            bstress = GetCurveValue(
+                (int)permeability_effstress_model_value[2], 0, pressure,
+                &gueltig);  // function for permeability vs pressure
+            bshear = GetCurveValue(
+                (int)permeability_effstress_model_value[1], 0, strainp,
+                &gueltig);  // function for shear displ (pls strain times
+                            // element thickness)
+            faultthick = permeability_effstress_model_value
+                [3];  // load element thickness as defined in .mmp
+            perm_stress = (br + bshear + bstress) * (br + bshear + bstress) *
+                          (br + bshear + bstress) / (12 * faultthick);
             break;
         default:
             break;
